@@ -4,7 +4,7 @@
 
 ## Project
 The goal of this project is to build an *agent* which has to learn how to steer four of the quadcopter's propellers that way so it moves to the *target* position.
-The simulator operates in *continous action space*. It accepts multidimensional input (position in $$R^3$$ and/or additional information like velocities). An output is a vector in $$R^4$$ with an information for each of the propellers about their rotations per minute rates.
+The simulator operates in *continous action space*. It accepts multidimensional input (position in $R^3$ and/or additional information like velocities). An output is a vector in $R^4$ with an information for each of the propellers about their rotations per minute rates.
 
 ### Algorigthm
 I have chosen a DDPG (Deep Deterministic Policy Gradients) algorithm after being able to successfully appy it to other continous action space problems from **OpenAI Gym** (pendulum and mountain car).
