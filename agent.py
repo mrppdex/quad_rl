@@ -4,10 +4,10 @@ import random
 from collections import deque, namedtuple
 
 
-
+# standard replay buffer
 class ReplayBuffer:
     def __init__(self, size):
-        self.replay_memory = deque(maxlen=size)			# used for O(1) popleft() operation
+        self.replay_memory = deque(maxlen=size)
 
     def add_to_memory(self, experience):
         self.replay_memory.append(experience)
@@ -72,9 +72,9 @@ class Critic:
 
         self.training = scope == "local"
         self.dropout_rate_1 = 0.2
-        self.dropout_rate_2 = 0.5
-        self.dropout_rate_3 = 0.5
-        self.net_size = 64
+        self.dropout_rate_2 = 0.2
+        self.dropout_rate_3 = 0.2
+        self.net_size = 32
 
         self.action_in = a_in
         self.state_in = s_in
@@ -101,17 +101,15 @@ class Agent:
         
         tf.reset_default_graph()
         
-        self.lr_actor = 1e-5			# learning rate for the actor
-        self.lr_critic = 1e-4			# learning rate for the critic
-        self.l2_reg_actor = 1e-7		# L2 regularization factor for the actor
-        self.l2_reg_critic = 1e-7		# L2 regularization factor for the critic
+        self.lr_actor = 1e-5 # learning rate for the actor
+        self.lr_critic = 1e-4 # learning rate for the critic
+        self.l2_reg_actor = 1e-7 # L2 regularization factor for the actor
+        self.l2_reg_critic = 1e-7 # L2 regularization factor for the critic
          
-        self.num_episodes = 200		# number of episodes
-        self.max_steps_ep = 100000	# default max number of steps per episode (unless env has a lower hardcoded limit)
         self.batch_size = 1024
         self.memory = ReplayBuffer(int(1e5))
-        self.gamma = 0.999
-        self.tau = 1e-1
+        self.gamma = 0.99
+        self.tau = 1e-2
         
         self.action_range = task.action_high - task.action_low
         
@@ -120,13 +118,11 @@ class Agent:
         
         self.noise = OUNoise(self.action_dim)
 
-        self.is_training = tf.placeholder(dtype=tf.bool, shape=[None])
-
         self.state_ph = tf.placeholder(dtype=tf.float32, shape=[None,self.state_dim])
         self.action_ph = tf.placeholder(dtype=tf.float32, shape=[None,self.action_dim])
         self.reward_ph = tf.placeholder(dtype=tf.float32, shape=[None])
         self.next_state_ph = tf.placeholder(dtype=tf.float32, shape=[None,self.state_dim])
-        self.is_not_terminal_ph = tf.placeholder(dtype=tf.float32, shape=[None]) # indicators (go into target computation)
+        self.is_not_terminal_ph = tf.placeholder(dtype=tf.float32, shape=[None])
 
         self.actions = Actor(self.state_ph, self.action_range, self.action_dim, "local").out
         self.target_actions = tf.stop_gradient(Actor(self.next_state_ph, self.action_range, self.action_dim, "target").out)
@@ -151,12 +147,12 @@ class Agent:
             self.update_targets_ops.append(self.update_slow_target_critic_op)
 
         self.update_slow_targets_op = tf.group(*self.update_targets_ops, name='update_slow_targets')
-        #self.targets = tf.expand_dims(self.reward_ph, 1) + tf.expand_dims(self.is_not_terminal_ph, 1) * self.gamma * self.target_critic
-
+        
         self.targets = self.reward_ph[None] + self.is_not_terminal_ph[None]*self.gamma*self.target_critic
         
         self.td_errors = self.targets - self.q_det
 
+        # L2 regularization for critic's weights
         self.critic_loss = tf.reduce_mean(tf.square(self.td_errors))
         for var in self.critic_vars:
             if not 'bias' in var.name:
@@ -165,14 +161,14 @@ class Agent:
         # critic optimizer
         self.critic_train_op = tf.train.AdamOptimizer(self.lr_critic).minimize(self.critic_loss)
 
-        # actor loss function (mean Q-values under current policy with regularization)
+        # L2 regularization for actor's weights
         self.actor_loss = -1*tf.reduce_mean(self.q_inf)
         for var in self.actor_vars:
             if not 'bias' in var.name:
                 self.actor_loss += self.l2_reg_actor * tf.nn.l2_loss(var)
 
         # actor optimizer
-        # the gradient of the mean Q-values wrt actor params is the deterministic policy gradient (keeping critic params fixed)
+        # gradient of critic inferenced Q-value w.r.t. the actor's theta
         self.actor_train_op = tf.train.AdamOptimizer(self.lr_actor).minimize(self.actor_loss, var_list=self.actor_vars)
 
         # initialize session
@@ -190,29 +186,28 @@ class Agent:
 
     
     def act(self, observation):
-
-        # choose action based on deterministic policy
+        
+        # actor
+        # input: state
+        # output: action
         action_for_state, = self.sess.run(self.actions, feed_dict = {self.state_ph: observation[None]})
 
-        action_for_state += self.noise.sample() #noise_process #*noise_scale
+        # noise added for exploration
+        action_for_state += self.noise.sample()
         
         # take step
         next_observation, reward, done = self.task.step(action_for_state)
-        #print("total_steps={}".format(self.total_steps), 
-        #      "reward={}, done={}".format(reward, done))
         
         self.total_reward += reward
         
-        
+        # add an experience to the buffer
         self.memory.add_to_memory((observation, action_for_state, reward, next_observation, 0.0 if done else 1.0))
 
-        # update network weights to fit a minibatch of experience
+        # if enough experiences are stored, fetch a batch of them
         if self.memory.len() >= self.batch_size:
 
-            # grab N (s,a,r,s') tuples from replay memory
             minibatch = self.memory.sample_from_memory(self.batch_size)
 
-            # update the critic and actor params using mean-square value error and deterministic policy gradient, respectively
             _, _ = self.sess.run([self.critic_train_op, self.actor_train_op], 
                 feed_dict = {
                     self.state_ph: np.asarray([elem[0] for elem in minibatch]),
@@ -229,5 +224,6 @@ class Agent:
         self.steps_in_ep += 1
 
         return action_for_state, next_observation, reward, done
+
 
 
